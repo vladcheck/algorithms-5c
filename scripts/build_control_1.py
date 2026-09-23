@@ -136,5 +136,105 @@ Spectr от длины волны существенно нелинейна, п�
 MAPE получается особенно большим, так как в области малых значений $Y$
 (короткие волны) относительная ошибка неконтролируемо растёт.""")
 
+# -------------------------------------------------- нелинейная аппроксимация
+md(r"""### Нелинейная аппроксимация: полиномы степеней 2–5
+
+Прямая плохо описывает нелинейную зависимость Spectr от длины волны.
+Естественное нелинейное обобщение — полиномиальная модель
+
+$$Y = b_0 + b_1 x + b_2 x^2 + \ldots + b_k x^k.$$
+
+Она **линейна по параметрам** $b_j$, поэтому вся техника предыдущего
+раздела применима без изменений: матрица объекты-признаки составляется
+из степеней $x$, оценки ищутся либо решением нормальных уравнений
+$(\Phi^{\mathsf{T}}\Phi)\,\theta = \Phi^{\mathsf{T}}Y$, либо градиентным
+спуском по стандартизованным степеням $z = (x - \bar x)/\sigma$
+(без стандартизации спуск расходится).""")
+
+code('''#Единые функции для полиномиальной аппроксимации любой степени
+Pol = np.polynomial.Polynomial
+
+
+def poly_fit(x, Y, degree, method="analytic", alpha=1e-4, epsylon=1e-4, max_steps=5000):
+    """Полином Y ~ b0 + b1*x + ... + b_degree*x^degree (линейный по параметрам).
+
+    method="analytic" — решение нормальных уравнений (Ф^T Ф) t = Ф^T Y;
+    method="gd" — градиентный спуск по стандартизованным степеням.
+    Возвращает (коэффициенты в исходном масштабе x, шаги, ошибки)."""
+    mu, sd = x.mean(), x.std()
+    z = (x - mu)/sd
+    Phi = np.column_stack([z**k for k in range(degree + 1)])
+    if method == "analytic":
+        cz, *_ = np.linalg.lstsq(Phi, Y, rcond=None)
+        steps = errors = None
+    else:
+        cz = np.zeros(degree + 1)
+        steps, errors = [], []
+        for step in range(max_steps):
+            pred = Phi @ cz
+            cz -= alpha * (-2 * Phi.T @ (Y - pred))
+            new_error = ((Y - pred)**2).mean()
+            steps.append(step + 1)
+            errors.append(new_error)
+            if new_error < epsylon:
+                break
+    #перевод коэффициентов из z в исходный масштаб x:
+    #p((x - mu)/sd) как многочлен от x
+    coef = Pol(cz)(Pol([-mu/sd, 1/sd])).coef
+    return coef, steps, errors
+
+
+def poly_metrics(Y, coef, x):
+    """MSE, MAE и MAPE полиномиальной модели на выборке (x, Y)."""
+    pred = Pol(coef)(x)
+    return {"MSE": ((Y - pred)**2).mean(),
+            "MAE": abs(Y - pred).mean(),
+            "MAPE": (abs((Y - pred)/Y)).mean()}''')
+
+code(r"""#Обучим полиномы степеней 1-5 и изобразим их на одном графике
+degrees = [1, 2, 3, 4, 5]
+fits = {}
+rows = []
+x_space = np.linspace(x.min(), x.max(), 300)
+
+fig = plt.figure()
+ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])
+ax.scatter(x, Y, s=10, label="обучающая выборка")
+for d in degrees:
+    coef, _, _ = poly_fit(x, Y, d)
+    fits[d] = coef
+    rows.append({"степень полинома": d, **poly_metrics(Y, coef, x)})
+    ax.plot(x_space, Pol(coef)(x_space), label=f"полином {d}-й степени")
+ax.legend()
+plt.show()
+
+#Сводная таблица метрик качества
+display(pd.DataFrame(rows))""")
+
+code(r"""#Проверка: тот же результат даёт градиентный спуск (method="gd")
+d = 3
+coef_gd, steps_gd, errors_gd = poly_fit(x, Y, d, method="gd", alpha=1e-4)
+print("MSE после градиентного спуска:", errors_gd[-1])
+print("совпадает с аналитическим решением:",
+      np.allclose(coef_gd, fits[d], atol=1e-3))
+
+#Кривая обучения — изменение MSE в процессе градиентного спуска
+plt.figure()
+plt.plot(steps_gd, errors_gd)
+plt.xlabel("шаг")
+plt.ylabel("MSE")
+plt.show()""")
+
+md(r"""**Вывод.** MSE монотонно убывает с ростом степени:
+$0{,}0177$ (прямая) $\to 0{,}0152$ (ст. 2) $\to 0{,}0122$ (ст. 3)
+$\to 0{,}0122$ (ст. 4) $\to 0{,}0069$ (ст. 5). Полином 5-й степени
+первым сгибается в пик около 700–800 нм и заметно лучше описывает
+форму спектра; степени 3 и 4 почти не отличаются.
+
+MAE и MAPE ведут себя немонотонно: они чувствительны к области коротких
+волн, где $Y$ близко к нулю и относительная ошибка велика. Дальнейший
+рост степени уменьшил бы ошибку на обучающей выборке ещё сильнее, но
+привёл бы к переобучению — полином начал бы подстраиваться под шум.""")
+
 nbf.write(nb, PATH)
 print(PATH, "updated,", len(cells), "cells")
